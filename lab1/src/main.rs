@@ -174,11 +174,14 @@ fn main() {
 
     let mut philosopher: Philosopher;
 
-    match rank {
-        0 => philosopher = Philosopher::first_philosopher(size),
-        _ if rank == last => philosopher = Philosopher::last_philosopher(size),
-        _ => philosopher = Philosopher::other_philosopher(rank),
+    if rank == 0 {
+        philosopher = Philosopher::first_philosopher(size);
+    } else if rank == last {
+        philosopher = Philosopher::last_philosopher(size);
+    } else {
+        philosopher = Philosopher::other_philosopher(rank);
     }
+    
 
     loop {
 
@@ -234,6 +237,7 @@ fn main() {
         philosopher.eat();
 
         philosopher.respond_to_requests(&world, &indent);
+
 
     }
 
