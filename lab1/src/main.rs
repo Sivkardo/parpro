@@ -1,4 +1,3 @@
-
 use mpi::{topology::SimpleCommunicator, traits::*};
 use rand::Rng;
 use std::{ thread, time };
@@ -42,7 +41,6 @@ struct Philosopher {
 }
 
 impl Philosopher {
-
     fn first_philosopher(size: i32) -> Self {
         Self {
             left_fork: ForkState::DIRTY,
@@ -89,13 +87,31 @@ impl Philosopher {
         self.left_fork_request || self.right_fork_request
     }
 
-    fn respond_to_requests(&mut self) {
+    fn respond_to_requests(&mut self, world: &SimpleCommunicator, indent: &String) {
         if self.left_fork_request {
-            // send fork to left neighbour
+            match self.left_fork {
+                ForkState::CLEAN | ForkState::MISSING => return,
+                ForkState::DIRTY => {
+                    self.left_fork = ForkState::CLEAN;
+                    world.process_at_rank(self.left_neighbour).send(&self.left_fork.to_u8());
+                    println!("{}[{}] giving left fork to [{}]", indent, world.rank(), self.left_neighbour);
+                    self.left_fork = ForkState::MISSING;
+                    self.left_fork_request = false;
+                }
+            }
         }
 
         if self.right_fork_request {
-            // send fork to right neighbour
+            match self.right_fork {
+                ForkState::CLEAN | ForkState::MISSING => return,
+                ForkState::DIRTY => {
+                    self.right_fork = ForkState::CLEAN;
+                    world.process_at_rank(self.right_neighbour).send(&self.right_fork.to_u8());
+                    println!("{}[{}] giving right fork to [{}]", indent, world.rank(), self.right_neighbour);
+                    self.right_fork = ForkState::MISSING;
+                    self.right_fork_request = false;
+                }
+            }
         }
     }
 
@@ -128,7 +144,7 @@ impl Philosopher {
         }
     }
 
-    fn received_response(&mut self, source_rank: i32) {
+    fn received_fork(&mut self, source_rank: i32) {
         if source_rank == self.left_neighbour {
             self.left_fork = ForkState::CLEAN;
         }
@@ -139,8 +155,6 @@ impl Philosopher {
             panic!("TODO");
         }
     }
-
-    
 }
 
 fn main() {
@@ -175,51 +189,30 @@ fn main() {
 
         for _ in 0..thinking_time {
 
-            // Check if philosopher received a message and respond
-            if let Some(_status) = world.any_process().immediate_probe() {
-                let (_, status)  = world.any_process().receive::<u8>();
+            // check if philosopher received a message and respond
+            if let Some(_) = world.any_process().immediate_probe() {
+                let (msg, status)  = world.any_process().receive::<u8>();
 
-                // TODO
-                // RESPOND TO REQUESTS
-
+                philosopher.note_request(status.source_rank());
+                philosopher.respond_to_requests(&world, &indent);
             }
 
             thread::sleep(time::Duration::from_secs(1));
         } 
 
-        while philosopher.check_forks_missing() {
+        if philosopher.check_forks_missing() {
             // send requests for missing forks
-            //philosopher.request_missing_fork(&world);
-
-            let mut asked_left = false;
-            let mut asked_right = false;
-
-            if philosopher.left_fork == ForkState::MISSING {
-                world.process_at_rank(philosopher.left_neighbour).send(&philosopher.left_fork.to_u8());
-                asked_left = true;
-                asked_right = false;
-            } 
-            else if philosopher.right_fork == ForkState::MISSING {
-                world.process_at_rank(philosopher.right_neighbour).send(&philosopher.left_fork.to_u8());
-                asked_left = false;
-                asked_right = true;
-            }
-            else {
-                panic!("TODO");
-            }
-
-            let mut received_asked_fork = false;
+            philosopher.request_missing_fork(&world);
 
             // check for received messages until all forks are acquired
-            while !received_asked_fork {
+            while philosopher.check_forks_missing() {
                 // receive any message
                 let (msg, status) = world.any_process().receive::<u8>();
                 let msg_type = ForkState::from_u8(msg);
 
                 // if message is a response to a request
                 if msg_type == ForkState::CLEAN { 
-                    philosopher.received_response(status.source_rank());
-                    received_asked_fork = true;
+                    philosopher.received_fork(status.source_rank());
                 } 
                 // if message is a request
                 else if msg_type == ForkState::MISSING {
