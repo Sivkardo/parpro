@@ -1,6 +1,15 @@
-use mpi::traits::*;
+use mpi::{topology::SimpleCommunicator, traits::*};
 use rand::Rng;
+use core::panic;
 use std::{ thread, time };
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+enum ForkState {
+    MISSING,
+    CLEAN,
+    DIRTY,
+}
 
 #[derive(Debug)]
 #[derive(PartialEq)]
@@ -9,14 +18,6 @@ enum Message {
     GiveLeftFork,
     RequestRightFork,
     RequestLeftFork,
-}
-
-#[derive(Debug)]
-#[derive(PartialEq)]
-enum ForkState {
-    MISSING,
-    CLEAN,
-    DIRTY,
 }
 
 impl Message {
@@ -39,12 +40,12 @@ impl Message {
         }
     }
 
-    fn is_request_msg(self) -> bool {
-        self == Message::RequestLeftFork || self == Message::RequestRightFork
+    fn is_request_msg(&self) -> bool {
+        *self == Message::RequestLeftFork || *self == Message::RequestRightFork
     }
 
-    fn is_give_msg(self) -> bool {
-        self == Message::GiveLeftFork || self == Message::GiveRightFork
+    fn is_give_msg(&self) -> bool {
+        *self == Message::GiveLeftFork || *self == Message::GiveRightFork
     }
 }
 
@@ -102,65 +103,45 @@ impl Philosopher {
         self.left_fork == ForkState::MISSING || self.right_fork == ForkState::MISSING
     }
 
-    /*
-    fn respond_to_requests(&mut self, world: &SimpleCommunicator, indent: &String) {
-        if self.left_fork_request && self.left_fork == ForkState::DIRTY{
-            self.left_fork = ForkState::CLEAN; // REDUNDANT
-            println!("{}[{}] giving left fork to [{}]!", indent, world.rank(), self.left_neighbour);
-            io::stdout().flush().unwrap();
-            world.process_at_rank(self.left_neighbour).send(&ForkState::CLEAN.to_u8());
-            self.left_fork = ForkState::MISSING;
-            self.left_fork_request = false;
-        }
-
-        if self.right_fork_request && self.right_fork == ForkState::DIRTY{
-            self.right_fork = ForkState::CLEAN; // REDUNDANT
-            println!("{}[{}] giving right fork to [{}]!", indent, world.rank(), self.right_neighbour);
-            io::stdout().flush().unwrap();
-            world.process_at_rank(self.right_neighbour).send(&ForkState::CLEAN.to_u8());
-            self.right_fork = ForkState::MISSING;
-            self.right_fork_request = false;
-        }
-    }
-
-    fn request_missing_fork(&self, world: &SimpleCommunicator, indent: &String) {
-        if self.left_fork == ForkState::MISSING {
-            println!("{}[{}] requesting left fork from [{}]!", indent, world.rank(), self.left_neighbour);
-            io::stdout().flush().unwrap();
-            world.process_at_rank(self.left_neighbour).send(&ForkState::MISSING.to_u8());
-        } 
-        else if self.right_fork == ForkState::MISSING {
-            println!("{}[{}] requesting right fork from [{}]!", indent, world.rank(), self.right_neighbour);
-            io::stdout().flush().unwrap();
-            world.process_at_rank(self.right_neighbour).send(&ForkState::MISSING.to_u8());
-        }
-    }
-
-    fn note_request(&mut self, source_rank: i32) {
-        // extra check for 2 processes, left_neighbour == right_neighbour
-        if source_rank == self.left_neighbour && !self.left_fork_request {
-            self.left_fork_request = true;
-        }
-        if source_rank == self.right_neighbour {
-            self.right_fork_request = true;
-        }
-
-    }
-
-    
-
-    fn received_fork(&mut self, source_rank: i32, world: &SimpleCommunicator, indent: &String) {
-        if msg_type == Message::GiveLeftFork {
-            println!("{}[{}] received left fork from [{}]!", indent, rank, sender);
+    fn received_fork(&mut self, msg_type: &Message, sender: i32, world: &SimpleCommunicator, indent: &String) -> &str{
+        if *msg_type == Message::GiveLeftFork {
+            println!("{}[{}] received left fork from [{}]!", indent, world.rank(), sender);
             self.left_fork = ForkState::CLEAN;
+            "left"
         } 
-        else if msg_type == Message::GiveRightFork {
-            println!("{}[{}] received right fork from [{}]!", indent, rank, sender);
+        else if *msg_type == Message::GiveRightFork {
+            println!("{}[{}] received right fork from [{}]!", indent, world.rank(), sender);
             self.right_fork = ForkState::CLEAN;
+            "right"
+        }
+        else {
+            panic!("")
         }
     }
-    */
 
+    fn respond_to_requests(&mut self, msg_type: &Message, sender: i32, world: &SimpleCommunicator, indent: &String) {
+        if *msg_type == Message::RequestLeftFork {
+            if self.right_fork == ForkState::DIRTY {
+                println!("{}[{}] giving right fork to [{}]!", indent, world.rank(), sender);
+                world.process_at_rank(sender).send(&Message::GiveLeftFork.to_u8());
+                self.right_fork = ForkState::MISSING;
+                self.right_fork_request = false;
+            } else {
+                self.right_fork_request = true
+            }
+        } 
+        else if *msg_type == Message::RequestRightFork {
+            if self.left_fork == ForkState::DIRTY {
+                println!("{}[{}] giving left fork to {}!", indent, world.rank(), sender);
+                world.process_at_rank(sender).send(&Message::GiveRightFork.to_u8());
+                self.left_fork = ForkState::MISSING;
+                self.left_fork_request = false;
+            } else {
+                self.left_fork_request = true;
+            }
+        }
+    }
+    
 }
     
 
@@ -193,37 +174,16 @@ fn main() {
                 let sender = status.source_rank();
 
                 //----------------- RECEIVED MESSAGE-----------------//
-                if msg_type == Message::GiveLeftFork {
-                    println!("{}[{}] received left fork from [{}]!", indent, rank, sender);
-                    philosopher.left_fork = ForkState::CLEAN;
-                } 
-                else if msg_type == Message::GiveRightFork {
-                    println!("{}[{}] received right fork from [{}]!", indent, rank, sender);
-                    philosopher.right_fork = ForkState::CLEAN;
+                if msg_type.is_give_msg() {
+                    philosopher.received_fork(&msg_type, sender, &world, &indent);
                 }
+                
                 //----------------- RESPOND TO A REQUEST-----------------//
-                if msg_type == Message::RequestLeftFork {
-                    if philosopher.right_fork == ForkState::DIRTY {
-                        println!("{}[{}] giving right fork to [{}]!", indent, rank, sender);
-                        world.process_at_rank(sender).send(&Message::GiveLeftFork.to_u8());
-                        philosopher.right_fork = ForkState::MISSING;
-                        philosopher.right_fork_request = false;
-                    } else {
-                        philosopher.right_fork_request = true
-                    }
-                } 
-                else if msg_type == Message::RequestRightFork {
-                    if philosopher.left_fork == ForkState::DIRTY {
-                        println!("{}[{}] giving left fork to {}!", indent, rank, sender);
-                        world.process_at_rank(sender).send(&Message::GiveRightFork.to_u8());
-                        philosopher.left_fork = ForkState::MISSING;
-                        philosopher.left_fork_request = false;
-                    } else {
-                        philosopher.left_fork_request = true;
-                    }
+                if msg_type.is_request_msg() {
+                    philosopher.respond_to_requests(&msg_type, sender, &world, &indent);
                 }
+            
             }
-
             thread::sleep(time::Duration::from_secs(1));
         } 
         println!("{}[{}] finished thinking!", indent, rank);
@@ -267,26 +227,14 @@ fn main() {
                     philosopher.right_fork = ForkState::CLEAN;
                     received = "right";
                 }
+                /* 
+                if msg_type.is_give_msg() {
+                    received = philosopher.received_fork(&msg_type, sender, &world, &indent);
+                }
+                */
                 //----------------- RESPOND TO A REQUEST-----------------//
-                if msg_type == Message::RequestLeftFork {
-                    if philosopher.right_fork == ForkState::DIRTY {
-                        println!("{}[{}] giving right fork to [{}]!", indent, rank, sender);
-                        world.process_at_rank(sender).send(&Message::GiveLeftFork.to_u8());
-                        philosopher.right_fork = ForkState::MISSING;
-                        philosopher.right_fork_request = false;
-                    } else {
-                        philosopher.right_fork_request = true
-                    }
-                } 
-                else if msg_type == Message::RequestRightFork {
-                    if philosopher.left_fork == ForkState::DIRTY {
-                        println!("{}[{}] giving left fork to {}!", indent, rank, sender);
-                        world.process_at_rank(sender).send(&Message::GiveRightFork.to_u8());
-                        philosopher.left_fork = ForkState::MISSING;
-                        philosopher.left_fork_request = false;
-                    } else {
-                        philosopher.left_fork_request = true;
-                    }
+                if msg_type.is_request_msg() {
+                    philosopher.respond_to_requests(&msg_type, sender, &world, &indent);
                 }
             }
             
@@ -301,14 +249,14 @@ fn main() {
 
         //----------------- RESPOND TO REQUESTS -----------------//
         if philosopher.left_fork_request {
-            println!("{}[{}] sending right fork to [{}]!", indent, rank, philosopher.right_neighbour);
-            world.process_at_rank(philosopher.right_neighbour).send(&Message::GiveRightFork.to_u8());
+            println!("{}[{}] sending left fork to [{}]!", indent, rank, philosopher.left_neighbour);
+            world.process_at_rank(philosopher.left_neighbour).send(&Message::GiveRightFork.to_u8());
             philosopher.left_fork = ForkState::MISSING;
             philosopher.left_fork_request = false;
         }
         if philosopher.right_fork_request {
-            println!("{}[{}] sending left fork to [{}]!", indent, rank, philosopher.left_neighbour);
-            world.process_at_rank(philosopher.left_neighbour).send(&Message::GiveLeftFork.to_u8());
+            println!("{}[{}] sending right fork to [{}]!", indent, rank, philosopher.right_neighbour);
+            world.process_at_rank(philosopher.right_neighbour).send(&Message::GiveLeftFork.to_u8());
             philosopher.right_fork = ForkState::MISSING;
             philosopher.right_fork_request = false;
         }
