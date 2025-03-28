@@ -3,8 +3,7 @@ use rand::Rng;
 use core::panic;
 use std::{ thread, time };
 
-#[derive(Debug)]
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum ForkState {
     MISSING,
     CLEAN,
@@ -17,7 +16,7 @@ enum Side {
     RIGHT,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum Message {
     GIVE(Side),
     REQUEST(Side),
@@ -34,14 +33,16 @@ impl Into<u8> for Message {
     }
 }
 
-impl From<u8> for Message {
-    fn from(value: u8) -> Self {
+impl TryFrom<u8> for Message {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0 => Message::GIVE(Side::RIGHT),
-            1 => Message::GIVE(Side::LEFT),
-            2 => Message::REQUEST(Side::RIGHT),
-            3 => Message::REQUEST(Side::LEFT),
-            _ => panic!("Invalid <u8> value passed as a message => {}", value)
+            0 => Ok(Message::GIVE(Side::RIGHT)),
+            1 => Ok(Message::GIVE(Side::LEFT)),
+            2 => Ok(Message::REQUEST(Side::RIGHT)),
+            3 => Ok(Message::REQUEST(Side::LEFT)),
+            _ => Err(format!("Invalid value: {} passed as a message.", value))
         }
     }
 }
@@ -98,25 +99,24 @@ impl Philosopher {
         self.left_fork == ForkState::MISSING || self.right_fork == ForkState::MISSING
     }
 
-    fn received_fork(&mut self, msg_type: &Message, sender: i32, world: &SimpleCommunicator, indent: &String) -> Option<Side> {
-        match msg_type {
-            Message::GIVE(Side::LEFT) => {
+    fn received_fork(&mut self, side: Side, sender: i32, world: &SimpleCommunicator, indent: &String) -> Option<Side> {
+        match side {
+            Side::LEFT => {
                 println!("{}[{}] received left fork from [{}]!", indent, world.rank(), sender);
                 self.left_fork = ForkState::CLEAN;
                 Some(Side::LEFT)
             } 
-            Message::GIVE(Side::RIGHT) => {
+            Side::RIGHT => {
                 println!("{}[{}] received right fork from [{}]!", indent, world.rank(), sender);
                 self.right_fork = ForkState::CLEAN;
                 Some(Side::RIGHT)
             }
-            _ => panic!("Invalid message received type => {:?}", msg_type)
         }
     }
 
-    fn respond_to_msg_request(&mut self, msg_type: &Message, sender: i32, world: &SimpleCommunicator, indent: &String) {
-        match msg_type {
-            Message::REQUEST(Side::LEFT) => {
+    fn respond_to_msg_request(&mut self, side: Side, sender: i32, world: &SimpleCommunicator, indent: &String) {
+        match side {
+            Side::LEFT => {
                 if self.right_fork == ForkState::DIRTY {
                     println!("{}[{}] giving right fork to [{}]!", indent, world.rank(), sender);
                     world.process_at_rank(sender).send::<u8>(&Message::GIVE(Side::LEFT).into());
@@ -126,7 +126,7 @@ impl Philosopher {
                     self.right_fork_request = true
                 }
             }
-            Message::REQUEST(Side::RIGHT) => {
+            Side::RIGHT => {
                 if self.left_fork == ForkState::DIRTY {
                     println!("{}[{}] giving left fork to {}!", indent, world.rank(), sender);
                     world.process_at_rank(sender).send::<u8>(&Message::GIVE(Side::RIGHT).into());
@@ -136,7 +136,6 @@ impl Philosopher {
                     self.left_fork_request = true;
                 }
             }
-            _ => panic!("Invalid message request type => {:?}", msg_type)
         }
     }
 
@@ -166,6 +165,7 @@ impl Philosopher {
             Side::RIGHT
         } 
         else {
+            // TODO: doesn't make sense for this to be unreachable though.
             panic!("Should be unreachable!");
         }
     }
@@ -194,15 +194,16 @@ fn main() {
             if let Some(_) = world.any_process().immediate_probe() {
                 let (msg, status)  = world.any_process().receive::<u8>();
 
-                let msg_type = Message::from(msg);
+                
+                let msg_type = msg.try_into().unwrap();
                 let sender = status.source_rank();
 
                 match msg_type {
-                    Message::GIVE(_) => {
-                        philosopher.received_fork(&msg_type, sender, &world, &indent);
+                    Message::GIVE(side) => {
+                        philosopher.received_fork(side, sender, &world, &indent);
                     }
-                    Message::REQUEST(_) => {
-                        philosopher.respond_to_msg_request(&msg_type, sender, &world, &indent);
+                    Message::REQUEST(side) => {
+                        philosopher.respond_to_msg_request(side, sender, &world, &indent);
                     }
                 }
             
@@ -214,20 +215,20 @@ fn main() {
         while philosopher.check_forks_missing() {   
 
             let requested_fork = philosopher.request_fork(&world, &indent);
-            let mut received = Option::None;
+            let mut received = None;
 
             while received.take() != Some(requested_fork) {
                 let (msg, status) = world.any_process().receive::<u8>();
 
-                let msg_type = Message::from(msg);
+                let msg_type = msg.try_into().unwrap();
                 let sender = status.source_rank();
 
                 match msg_type {
-                    Message::GIVE(_) => {
-                        received = philosopher.received_fork(&msg_type, sender, &world, &indent);
+                    Message::GIVE(side) => {
+                        received = philosopher.received_fork(side, sender, &world, &indent);
                     }
-                    Message::REQUEST(_) => {
-                        philosopher.respond_to_msg_request(&msg_type, sender, &world, &indent);
+                    Message::REQUEST(side) => {
+                        philosopher.respond_to_msg_request(side, sender, &world, &indent);
                     }
                 }
             }
